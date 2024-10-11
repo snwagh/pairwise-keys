@@ -4,12 +4,46 @@ import json
 from syftbox.lib import ClientConfig
 
 APP_NAME = "pairwise-keys"
+STATISTICAL_SECURITY = 2 ** 6
+
+
+# When each ring member arrives, they will create their own key in public/pairwise-keys/second/key.txt
+# All app related data will be inside public/APP_NAME/
+# syft_root_dir/
+# ├── .config/                      <-- Hidden for better UX
+# │   └── config.json
+# ├── apps/                         <-- This is currently inside sync
+# │   └── ring
+# └── sync/                         <-- This is the datasites folder
+#     ├── a@openmined.org
+#         └── public
+#             └── _syftperm (this folder is public)
+#             └── ring/
+#                 └── _syftperm (this folder is private)
+#                 └── private_file.txt
+#     └── b@openmined.org
+#         └── public
+#             └── _syftperm (this folder is public)
+#             └── ring/
+#                 └── _syftperm (this folder is private)
+#                 └── private_file.txt
+
+
+class ApplicationBase: 
+    def share_folder(email_id, folder_path):
+        # This method change the _syftperms inside a given folder_path and share it with the given email_id.
+        # This will error out if this user does not have write access to this file.
+
+    def create_file(email_id, file_name, folder_path):
+        # This method will create a file in folder_path. This will error out if 
+        # this user does not have write access to this file.
+
+    
 
 class RingRunner:
     def __init__(self):
-        self.client_config = ClientConfig.load(
-            os.path.expanduser("~/.syftbox/client_config.json")
-        )
+        self.data_file = Path(os.path.abspath(__file__)).parent / "data.json" 
+        self.client_config = ClientConfig.load(os.environ.get("SYFTBOX_CLIENT_CONFIG_PATH"))
         self.my_email = self.client_config["email"]
         self.my_home = (
             Path(self.client_config["sync_folder"])
@@ -17,12 +51,12 @@ class RingRunner:
             / "app_pipelines"
             / APP_NAME
         )
-        
+
         self.prev_email, self.next_email = self.get_neighbors()
+        print(f"my next: {self.next_email}, my prev: {self.prev_email}")
         self.first_folder = self.my_home / "first"
         self.second_folder = self.my_home / "second"
-        self.folders = [self.first, self.second_folder]
-        self.data_file = Path(os.path.abspath(__file__)).parent / "data.json"
+        self.folders = [self.my_home, self.first_folder, self.second_folder]
         
         self.syft_perm_json = {
             "admin": [self.my_email],
@@ -48,14 +82,13 @@ class RingRunner:
         return ring_participants[prev_index], ring_participants[next_index]
 
 
+    # Each folder will setup with default perms
     def setup_folders(self):
         print("Setting up the necessary folders.")
         for folder in self.folders:
             os.makedirs(folder, exist_ok=True)
-            with open(folder / "dummy", "w") as f:
-                pass
-        with open(self.my_home / "_.syftperm", "w") as f:
-            json.dump(self.syft_perm_json, f)
+            with open(folder / "_.syftperm", "w") as f:
+                json.dump(self.syft_perm_json, f)
             
     def setup_folder_perms(self):
         # Give write perms to the first folder for the prev ring member
@@ -84,40 +117,7 @@ class RingRunner:
         with open(self.second_folder / "_.syftperm", "w") as f:
             json.dump(self.syft_perm_second_json, f)
 
-    # def check_datafile_exists(self):
-    #     files = []
-    #     print(f"Please put your data files in {self.running_folder}.")
-    #     for file in os.listdir(self.running_folder):
-    #         if file.endswith(".json"):
-    #             print("There is a file here.")
-    #             files.append(os.path.join(self.running_folder, file))
-    #     print(f"Found {len(files)} files in {self.running_folder}.")
-    #     return files
-
-    # def data_read_and_increment(self, file_name):
-    #     with open(file_name) as f:
-    #         data = json.load(f)
-
-    #     ring_participants = data["ring"]
-    #     datum = data["data"]
-    #     to_send_idx = data["current_index"] + 1
-
-    #     if to_send_idx >= len(ring_participants):
-    #         print("END TRANSMISSION.")
-    #         to_send_email = None
-    #     else:
-    #         to_send_email = ring_participants[to_send_idx]
-
-    #     # Read the secret value from secret.txt
-    #     with open(self.secret_file, 'r') as secret_file:
-    #         secret_value = int(secret_file.read().strip())
-
-    #     # Increment datum by the secret value instead of 1
-    #     data["data"] = datum + secret_value
-    #     data["current_index"] = to_send_idx
-    #     os.remove(file_name)
-    #     return data, to_send_email
-
+ 
     def data_writer(self, file_name, result):
         with open(file_name, "w") as f:
             json.dump(result, f)
@@ -130,11 +130,12 @@ class RingRunner:
         else:
             raise ValueError("Invalid key type.")
         
+        print(f"Checking if {key_file} exists: {key_file.exists()}")
         return key_file.exists()
     
     def create_secret_value(self):
         import random
-        secret_value = random.randint(1, 100)
+        secret_value = random.randint(1, STATISTICAL_SECURITY)
         with open(self.second_folder / "key.txt", "w") as f:
             f.write(str(secret_value))
         return secret_value
@@ -151,9 +152,6 @@ class RingRunner:
         print(f"Writing to {output_path}.")
         self.data_writer(output_path, key_second)
 
-    # def terminate_ring(self):
-    #     my_ring_runner.data_writer(self.done_folder / "data.json", datum)
-
 
 if __name__ == "__main__":
     # Start of script. Step 1. Setup any folders that may be necessary.
@@ -163,7 +161,7 @@ if __name__ == "__main__":
     
     # Step 2. Check if second key already exists. If it does, proceed to Step 5.
     exists = my_ring_runner.check_key_exists("second")
-    
+
     if not exists:
         print("Second key does not exist. Let's create it.")
         # Step 3. Create a random value and write it to the second folder as key.txt
